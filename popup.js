@@ -16,6 +16,7 @@ let discoveryEpoch     = 0;   // incremented each run; callbacks ignore stale ep
 let clipping           = false;
 let pageInfo         = null;   // { url, title, isConfluence, pageId }
 let pageQueue        = [];     // [{ url, title, confluencePageId }]
+let activeTabId      = null;   // Tab ID of the active tab (for getLiveHtml)
 
 // --- DOM refs ---
 
@@ -435,6 +436,23 @@ async function discoverChildPages() {
   }
 }
 
+// --- Live HTML helper ---
+
+/**
+ * Request the live rendered HTML from the active tab's content script.
+ * Returns { html, url } or null if the content script is unavailable.
+ * This captures JS-rendered content (draw.io, Gliffy, etc.) that fetch() misses.
+ */
+function getLiveHtmlFromTab(tabId) {
+  return new Promise((resolve) => {
+    if (!tabId) { resolve(null); return; }
+    chrome.tabs.sendMessage(tabId, { action: 'getLiveHtml' }, (response) => {
+      if (chrome.runtime.lastError || !response) { resolve(null); return; }
+      resolve(response);
+    });
+  });
+}
+
 // --- Permission helper ---
 
 async function ensurePermission(saved, active) {
@@ -511,10 +529,19 @@ clipBtn.addEventListener('click', async () => {
     assetProgressRow.classList.add('hidden');
     assetProgressBar.style.width = '0%';
 
+    // For the first page (the active tab), use live rendered HTML so JS-rendered
+    // content (draw.io, Gliffy, etc.) is captured. Child pages fall back to fetch().
+    let liveHtml = null;
+    if (i === 0 && activeTabId) {
+      const live = await getLiveHtmlFromTab(activeTabId);
+      if (live && live.html) liveHtml = live.html;
+    }
+
     const result = await clipPage({
       url:               page.url,
       confluencePageId:  page.confluencePageId || null,
       confluenceBaseUrl,
+      liveHtml,
       vaultDir:          vaultDirHandle,
       clipSubfolder,
       downloadAssets,
@@ -612,6 +639,8 @@ async function init() {
       pageTitleEl.textContent = 'No active tab';
       return;
     }
+
+    activeTabId = tab.id;
 
     chrome.tabs.sendMessage(tab.id, { action: 'getPageInfo' }, async (response) => {
       if (!chrome.runtime.lastError && response) {
