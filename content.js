@@ -56,12 +56,54 @@ function resolveRelativeUrls() {
   });
 }
 
+/**
+ * Replace draw.io inline SVGs with Confluence's pre-rendered attachment PNG URLs.
+ * Confluence's draw.io macro script contains a readerOpts.imageUrl pointing to
+ * /download/attachments/<pageId>/<name>.png — the server-rendered PNG with correct
+ * text labels, fonts, and layout. We extract that URL from the script and replace
+ * the inline SVG (which Obsidian can't render text from) with an <img> tag.
+ */
+function replaceDrawioSvgsWithPngUrls() {
+  const origin = window.location.origin;
+
+  // Each draw.io macro is a div[data-macro-name="drawio"] containing a <script>
+  // that sets readerOpts.imageUrl = '' + '/download/attachments/...' + '?version=...'
+  for (const macro of document.querySelectorAll('[data-macro-name="drawio"], [data-macro-name="drawio-sketch"]')) {
+    const scriptEl = macro.querySelector('script');
+    if (!scriptEl) continue;
+
+    const text = scriptEl.textContent || '';
+
+    // Extract the attachment PNG path from imageUrl assignment
+    // Pattern: imageUrl = '' + '/download/attachments/...' + '?version=...'
+    const imgMatch = text.match(/imageUrl\s*=\s*''\s*\+\s*'([^']+)'\s*\+\s*'([^']*)'/);
+    if (!imgMatch) continue;
+
+    const pngUrl = origin + imgMatch[1] + imgMatch[2];
+
+    // Extract the diagram container ID from the script to find the SVG
+    const containerIdMatch = text.match(/getElementById\(['"]([^'"]+)['"]\)/);
+    if (!containerIdMatch) continue;
+
+    const container = document.getElementById(containerIdMatch[1]);
+    const svg = container && container.querySelector('svg');
+    if (!svg) continue;
+
+    const img = document.createElement('img');
+    img.src = pngUrl;
+    img.alt = imgMatch[1].split('/').pop().replace('.png', '');
+    img.style.maxWidth = '100%';
+    svg.replaceWith(img);
+  }
+}
+
 chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   // Return the live rendered HTML of the current tab — captures JS-rendered content
   // (draw.io, Gliffy, shadow DOM components, etc.) that a fetch() from the popup can never see.
   if (request.action === 'getLiveHtml') {
     const flattenTimeout = new Promise((resolve) => setTimeout(resolve, 3000));
     Promise.race([flattenShadowDom(), flattenTimeout]).then(() => {
+      replaceDrawioSvgsWithPngUrls();
       resolveRelativeUrls();
       sendResponse({ html: document.documentElement.outerHTML, url: document.URL });
     });
