@@ -1,45 +1,65 @@
 // popup.js
-// Popup orchestration: scans the active tab, discovers child pages,
-// manages the clip queue, handles cancellation, and shows progress.
+// Popup orchestration: vault picker, subfolder config, asset settings,
+// child page discovery, clip queue management, and progress display.
 
 // --- State ---
 
-let clipDirHandle = null;
-let assetDirHandle = null;
-let savedClipHandle = null;
-let savedAssetHandle = null;
-let cancelled = false;
-let clipping = false;
-let pageInfo = null;        // { url, title, isConfluence, pageId }
-let pageQueue = [];         // [{ url, title, confluencePageId }]
+let vaultDirHandle   = null;   // Active FSA handle (permission confirmed)
+let savedVaultHandle = null;   // Persisted FSA handle (may need permission re-grant)
+let clipSubfolder    = '';     // e.g. "raw"
+let assetSubfolder   = 'assets';
+let downloadAssets   = false;
+let cancelled        = false;
+let clipping         = false;
+let pageInfo         = null;   // { url, title, isConfluence, pageId }
+let pageQueue        = [];     // [{ url, title, confluencePageId }]
 
 // --- DOM refs ---
 
-const pageTitleEl = document.getElementById('page-title');
-const includeChildrenEl = document.getElementById('include-children');
-const depthRowEl = document.getElementById('depth-row');
-const depthSelectEl = document.getElementById('depth-select');
-const childPagesSectionEl = document.getElementById('child-pages-section');
-const clipPathDisplay = document.getElementById('clip-path-display');
-const assetPathDisplay = document.getElementById('asset-path-display');
-const selectClipBtn = document.getElementById('select-clip-btn');
-const selectAssetBtn = document.getElementById('select-asset-btn');
-const clipBtn = document.getElementById('clip-btn');
-const cancelBtn = document.getElementById('cancel-btn');
-const statusEl = document.getElementById('status');
-const progressListEl = document.getElementById('progress-list');
+const pageTitleEl              = document.getElementById('page-title');
+const includeChildrenEl        = document.getElementById('include-children');
+const depthRowEl               = document.getElementById('depth-row');
+const depthInputEl             = document.getElementById('depth-input');
+const childPagesSectionEl      = document.getElementById('child-pages-section');
 
-// --- IndexedDB persistence (same pattern as Asset Clipper) ---
+const selectVaultBtn           = document.getElementById('select-vault-btn');
+const vaultPathDisplay         = document.getElementById('vault-path-display');
 
-const DB_NAME = 'batch-clipper';
+const selectClipSubfolderBtn   = document.getElementById('select-clip-subfolder-btn');
+const clipSubfolderDisplay     = document.getElementById('clip-subfolder-display');
+const clipSubfolderPicker      = document.getElementById('clip-subfolder-picker');
+const clipSubfolderSelect      = document.getElementById('clip-subfolder-select');
+const clipNewFolderInput       = document.getElementById('clip-new-folder-input');
+const clipSubfolderConfirm     = document.getElementById('clip-subfolder-confirm');
+
+const downloadAssetsEl         = document.getElementById('download-assets');
+const selectAssetSubfolderBtn  = document.getElementById('select-asset-subfolder-btn');
+const assetSubfolderDisplay    = document.getElementById('asset-subfolder-display');
+const assetSubfolderPicker     = document.getElementById('asset-subfolder-picker');
+const assetSubfolderSelect     = document.getElementById('asset-subfolder-select');
+const assetNewFolderInput      = document.getElementById('asset-new-folder-input');
+const assetSubfolderConfirm    = document.getElementById('asset-subfolder-confirm');
+
+const assetProgressRow         = document.getElementById('asset-progress-row');
+const assetProgressLabel       = document.getElementById('asset-progress-label');
+const assetProgressBar         = document.getElementById('asset-progress-bar');
+
+const clipBtn                  = document.getElementById('clip-btn');
+const cancelBtn                = document.getElementById('cancel-btn');
+const statusEl                 = document.getElementById('status');
+const progressListEl           = document.getElementById('progress-list');
+
+// --- IndexedDB persistence for FSA handles ---
+
+const DB_NAME    = 'batch-clipper';
 const STORE_NAME = 'handles';
 
 function openDB() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, 1);
     req.onupgradeneeded = (e) => e.target.result.createObjectStore(STORE_NAME);
-    req.onsuccess = (e) => resolve(e.target.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess    = (e) => resolve(e.target.result);
+    req.onerror      = () => reject(req.error);
   });
 }
 
@@ -49,79 +69,267 @@ async function saveHandle(key, handle) {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     tx.objectStore(STORE_NAME).put(handle, key);
     tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error);
+    tx.onerror    = () => reject(tx.error);
   });
 }
 
 async function loadHandle(key) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
+    const tx  = db.transaction(STORE_NAME, 'readonly');
     const req = tx.objectStore(STORE_NAME).get(key);
     req.onsuccess = () => resolve(req.result || null);
-    req.onerror = () => reject(req.error);
+    req.onerror   = () => reject(req.error);
   });
 }
 
-// --- Folder display ---
+// --- chrome.storage.local helpers ---
 
-function updateFolderDisplay(displayEl, btnEl, handle) {
+async function saveSetting(key, value) {
+  return new Promise((resolve) => chrome.storage.local.set({ [key]: value }, resolve));
+}
+
+async function loadSetting(key, defaultValue = null) {
+  return new Promise((resolve) =>
+    chrome.storage.local.get([key], (result) => resolve(result[key] ?? defaultValue))
+  );
+}
+
+// --- Enumerate subdirectories ---
+
+async function getSubdirectories(dirHandle) {
+  // Ensure we have read permission before enumerating
+  try {
+    let perm = await dirHandle.queryPermission({ mode: 'readwrite' });
+    if (perm !== 'granted') {
+      perm = await dirHandle.requestPermission({ mode: 'readwrite' });
+    }
+    if (perm !== 'granted') return [];
+  } catch { return []; }
+
+  const folders = [];
+  try {
+    for await (const [name, entry] of dirHandle.entries()) {
+      if (entry.kind === 'directory' && !name.startsWith('.')) {
+        folders.push(name);
+      }
+    }
+  } catch { /* ignore */ }
+  return folders.sort();
+}
+
+async function populateSelect(selectEl, folders, currentValue) {
+  selectEl.innerHTML = '';
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = folders.length ? '— choose a folder —' : '— no subfolders yet —';
+  selectEl.appendChild(placeholder);
+
+  folders.forEach((name) => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    selectEl.appendChild(opt);
+  });
+
+  if (currentValue) selectEl.value = currentValue;
+}
+
+// --- Display helpers ---
+
+function updateVaultDisplay(handle) {
   if (handle) {
-    displayEl.textContent = handle.name;
-    displayEl.classList.remove('not-set');
-    displayEl.classList.add('is-set');
-    btnEl.textContent = 'Change';
+    vaultPathDisplay.textContent = handle.name;
+    vaultPathDisplay.classList.remove('not-set');
+    vaultPathDisplay.classList.add('is-set');
+    selectVaultBtn.textContent = 'Change';
+    selectClipSubfolderBtn.disabled = false;
   } else {
-    displayEl.classList.remove('is-set');
-    displayEl.classList.add('not-set');
-    btnEl.textContent = 'Browse…';
+    vaultPathDisplay.textContent = 'Not set';
+    vaultPathDisplay.classList.remove('is-set');
+    vaultPathDisplay.classList.add('not-set');
+    selectVaultBtn.textContent = 'Browse…';
+    selectClipSubfolderBtn.disabled = true;
   }
+}
+
+function updateClipSubfolderDisplay(close = true) {
+  if (clipSubfolder) {
+    clipSubfolderDisplay.textContent = clipSubfolder;
+    clipSubfolderDisplay.classList.remove('not-set');
+    clipSubfolderDisplay.classList.add('is-set');
+    selectClipSubfolderBtn.textContent = 'Change';
+  } else {
+    clipSubfolderDisplay.textContent = 'Not set';
+    clipSubfolderDisplay.classList.remove('is-set');
+    clipSubfolderDisplay.classList.add('not-set');
+    selectClipSubfolderBtn.textContent = 'Set…';
+  }
+  if (close) clipSubfolderPicker.classList.add('hidden');
+}
+
+function updateAssetSubfolderDisplay(close = true) {
+  if (downloadAssets) {
+    assetSubfolderDisplay.textContent = assetSubfolder || 'assets';
+    assetSubfolderDisplay.classList.remove('not-set', 'hidden');
+    assetSubfolderDisplay.classList.add('is-set');
+    selectAssetSubfolderBtn.textContent = 'Change';
+    selectAssetSubfolderBtn.classList.remove('hidden');
+  } else {
+    assetSubfolderDisplay.classList.add('hidden');
+    selectAssetSubfolderBtn.classList.add('hidden');
+  }
+  if (close) assetSubfolderPicker.classList.add('hidden');
 }
 
 function updateClipButton() {
   if (clipping) return;
-  const hasClipDir = !!(clipDirHandle || savedClipHandle);
-  const count = pageQueue.length || 1;
-  clipBtn.disabled = !hasClipDir;
+  const hasVault     = !!(vaultDirHandle || savedVaultHandle);
+  const hasSubfolder = !!clipSubfolder;
+  const count        = pageQueue.length || 1;
+  clipBtn.disabled   = !(hasVault && hasSubfolder);
   clipBtn.textContent = `Clip ${count} page${count !== 1 ? 's' : ''}`;
 }
 
 function setStatus(msg, type = '') {
   statusEl.textContent = msg;
-  statusEl.className = 'status ' + type;
+  statusEl.className   = 'status ' + type;
 }
 
-// --- Folder selection ---
+// --- Vault selection ---
 
-selectClipBtn.addEventListener('click', async () => {
+selectVaultBtn.addEventListener('click', async () => {
   try {
     const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
-    clipDirHandle = handle;
-    savedClipHandle = handle;
-    await saveHandle('clipDir', handle);
-    updateFolderDisplay(clipPathDisplay, selectClipBtn, handle);
-    // Default asset dir to <clipDir>/assets if not explicitly set
-    if (!assetDirHandle && !savedAssetHandle) {
-      assetPathDisplay.textContent = `${handle.name}/assets/`;
-      assetPathDisplay.classList.remove('not-set');
-      assetPathDisplay.classList.add('is-set');
-    }
+    vaultDirHandle   = handle;
+    savedVaultHandle = handle;
+    await saveHandle('vaultDir', handle);
+    updateVaultDisplay(handle);
+    // Reset clip subfolder since vault changed
+    clipSubfolder = '';
+    await saveSetting('clipSubfolder', '');
+    updateClipSubfolderDisplay();
     updateClipButton();
+    setStatus('Vault set.', 'success');
   } catch (err) {
-    if (err.name !== 'AbortError') setStatus('Could not select folder.', 'error');
+    if (err.name !== 'AbortError') setStatus('Could not select vault folder.', 'error');
   }
 });
 
-selectAssetBtn.addEventListener('click', async () => {
-  try {
-    const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
-    assetDirHandle = handle;
-    savedAssetHandle = handle;
-    await saveHandle('assetDir', handle);
-    updateFolderDisplay(assetPathDisplay, selectAssetBtn, handle);
-  } catch (err) {
-    if (err.name !== 'AbortError') setStatus('Could not select folder.', 'error');
+// --- Clip subfolder picker ---
+
+selectClipSubfolderBtn.addEventListener('click', async () => {
+  const isOpen = !clipSubfolderPicker.classList.contains('hidden');
+  if (isOpen) {
+    clipSubfolderPicker.classList.add('hidden');
+    return;
   }
+
+  const activeHandle = vaultDirHandle || savedVaultHandle;
+  if (!activeHandle) {
+    setStatus('Please select a vault first.', 'error');
+    return;
+  }
+
+  clipSubfolderSelect.innerHTML = '<option value="">Loading…</option>';
+  clipNewFolderInput.value = '';
+  clipSubfolderPicker.classList.remove('hidden');
+
+  const folders = await getSubdirectories(activeHandle);
+  if (!vaultDirHandle && folders.length > 0) vaultDirHandle = activeHandle;
+  await populateSelect(clipSubfolderSelect, folders, clipSubfolder);
+});
+
+// Selecting from dropdown clears the text input
+clipSubfolderSelect.addEventListener('change', () => {
+  if (clipSubfolderSelect.value) clipNewFolderInput.value = '';
+});
+
+// Typing clears the dropdown selection
+clipNewFolderInput.addEventListener('input', () => {
+  if (clipNewFolderInput.value.trim()) clipSubfolderSelect.value = '';
+});
+
+clipSubfolderConfirm.addEventListener('click', async () => {
+  const value = clipSubfolderSelect.value || clipNewFolderInput.value.trim();
+  if (!value) {
+    setStatus('Please choose or name a subfolder.', 'error');
+    return;
+  }
+  clipSubfolder = value;
+  await saveSetting('clipSubfolder', clipSubfolder);
+  // Reset asset subfolder when clip subfolder changes
+  assetSubfolder = 'assets';
+  await saveSetting('assetSubfolder', assetSubfolder);
+  updateClipSubfolderDisplay(true);
+  updateAssetSubfolderDisplay(true);
+  updateClipButton();
+  setStatus('Clip subfolder set.', 'success');
+});
+
+// --- Asset subfolder picker ---
+
+downloadAssetsEl.addEventListener('change', async () => {
+  downloadAssets = downloadAssetsEl.checked;
+  await saveSetting('downloadAssets', downloadAssets);
+  updateAssetSubfolderDisplay(true);
+  updateClipButton();
+});
+
+selectAssetSubfolderBtn.addEventListener('click', async () => {
+  const isOpen = !assetSubfolderPicker.classList.contains('hidden');
+  if (isOpen) {
+    assetSubfolderPicker.classList.add('hidden');
+    return;
+  }
+
+  if (!clipSubfolder) {
+    setStatus('Please set a clip subfolder first.', 'error');
+    return;
+  }
+
+  const activeHandle = vaultDirHandle || savedVaultHandle;
+  if (!activeHandle) {
+    setStatus('Please select a vault first.', 'error');
+    return;
+  }
+
+  assetSubfolderSelect.innerHTML = '<option value="">Loading…</option>';
+  assetNewFolderInput.value = '';
+  assetSubfolderPicker.classList.remove('hidden');
+
+  // List subdirs inside the clip subfolder
+  let clipDirHandle;
+  try {
+    clipDirHandle = await activeHandle.getDirectoryHandle(clipSubfolder, { create: false });
+  } catch {
+    clipDirHandle = null;
+  }
+
+  const folders = clipDirHandle ? await getSubdirectories(clipDirHandle) : [];
+  await populateSelect(assetSubfolderSelect, folders, assetSubfolder);
+});
+
+// Selecting from dropdown clears the text input
+assetSubfolderSelect.addEventListener('change', () => {
+  if (assetSubfolderSelect.value) assetNewFolderInput.value = '';
+});
+
+// Typing clears the dropdown selection
+assetNewFolderInput.addEventListener('input', () => {
+  if (assetNewFolderInput.value.trim()) assetSubfolderSelect.value = '';
+});
+
+assetSubfolderConfirm.addEventListener('click', async () => {
+  const value = assetSubfolderSelect.value || assetNewFolderInput.value.trim();
+  if (!value) {
+    setStatus('Please choose or name an asset subfolder.', 'error');
+    return;
+  }
+  assetSubfolder = value;
+  await saveSetting('assetSubfolder', assetSubfolder);
+  updateAssetSubfolderDisplay(true);
+  setStatus('Asset subfolder set.', 'success');
 });
 
 // --- Child pages toggle ---
@@ -138,7 +346,13 @@ includeChildrenEl.addEventListener('change', async () => {
   }
 });
 
-depthSelectEl.addEventListener('change', async () => {
+depthInputEl.addEventListener('change', async () => {
+  const raw = depthInputEl.value.trim();
+  if (raw !== '' && (isNaN(raw) || parseInt(raw, 10) < 1)) {
+    depthInputEl.value = '1';
+  } else if (raw !== '') {
+    depthInputEl.value = String(parseInt(raw, 10));
+  }
   if (includeChildrenEl.checked && pageInfo?.isConfluence && pageInfo?.pageId) {
     await discoverChildPages();
   }
@@ -146,17 +360,16 @@ depthSelectEl.addEventListener('change', async () => {
 
 async function discoverChildPages() {
   setStatus('Discovering child pages…', 'loading');
-  clipBtn.disabled = true;
+  clipBtn.disabled    = true;
   clipBtn.textContent = 'Discovering…';
 
-  const depthVal = depthSelectEl.value;
-  const maxDepth = depthVal === '0' ? Infinity : parseInt(depthVal, 10);
-  const baseUrl = new URL(pageInfo.url).origin;
+  const depthVal = depthInputEl.value.trim();
+  const maxDepth = depthVal === '' ? Infinity : Math.max(1, parseInt(depthVal, 10));
+  const baseUrl  = new URL(pageInfo.url).origin;
 
   try {
     const children = await fetchChildPages(baseUrl, pageInfo.pageId, maxDepth, 0, () => false);
 
-    // Build queue: current page first, then children
     pageQueue = [
       { url: pageInfo.url, title: pageInfo.title, confluencePageId: pageInfo.pageId },
       ...children.map(c => ({ url: c.url, title: c.title, confluencePageId: c.id })),
@@ -171,31 +384,37 @@ async function discoverChildPages() {
   }
 }
 
+// --- Permission helper ---
+
+async function ensurePermission(saved, active) {
+  if (active) return active;
+  if (!saved) return null;
+  try {
+    let perm = await saved.queryPermission({ mode: 'readwrite' });
+    if (perm === 'granted') return saved;
+    perm = await saved.requestPermission({ mode: 'readwrite' });
+    if (perm === 'granted') return saved;
+  } catch { /* stale handle */ }
+  return null;
+}
+
 // --- Main clip action ---
 
 clipBtn.addEventListener('click', async () => {
   if (clipping) return;
 
-  // Ensure we have a clip directory
-  const activeClipHandle = await ensurePermission(savedClipHandle, clipDirHandle, 'clipDir');
-  if (!activeClipHandle) {
-    setStatus('Please select a Clip folder first.', 'error');
+  const activeVault = await ensurePermission(savedVaultHandle, vaultDirHandle);
+  if (!activeVault) {
+    setStatus('Please select a Vault folder first.', 'error');
     return;
   }
-  clipDirHandle = activeClipHandle;
+  vaultDirHandle = activeVault;
 
-  // Resolve asset directory: explicit override or default to <clipDir>/assets
-  let activeAssetHandle;
-  if (savedAssetHandle) {
-    activeAssetHandle = await ensurePermission(savedAssetHandle, assetDirHandle, null);
+  if (!clipSubfolder) {
+    setStatus('Please set a clip subfolder first.', 'error');
+    return;
   }
-  if (!activeAssetHandle) {
-    // Default: create assets/ subfolder inside clip dir
-    activeAssetHandle = await clipDirHandle.getDirectoryHandle('assets', { create: true });
-  }
-  assetDirHandle = activeAssetHandle;
 
-  // Build queue if not already set (single-page clip)
   if (pageQueue.length === 0) {
     const entry = { url: pageInfo.url, title: pageInfo.title };
     if (pageInfo.isConfluence && pageInfo.pageId) {
@@ -204,14 +423,12 @@ clipBtn.addEventListener('click', async () => {
     pageQueue = [entry];
   }
 
-  // Start clipping
-  clipping = true;
+  clipping  = true;
   cancelled = false;
   clipBtn.classList.add('hidden');
   cancelBtn.classList.remove('hidden');
   progressListEl.innerHTML = '';
 
-  // Render initial progress list
   pageQueue.forEach((page, i) => {
     const li = document.createElement('li');
     li.innerHTML = `
@@ -221,112 +438,119 @@ clipBtn.addEventListener('click', async () => {
     progressListEl.appendChild(li);
   });
 
-  let successCount = 0;
-  let errorCount = 0;
+  let successCount     = 0;
+  let errorCount       = 0;
+  let lastClippedTitle = null;
 
   for (let i = 0; i < pageQueue.length; i++) {
     if (cancelled) break;
 
-    const page = pageQueue[i];
-    const statusEl = document.getElementById(`item-${i}`);
-    if (statusEl) { statusEl.textContent = '↓'; statusEl.className = 'item-status downloading'; }
+    const page   = pageQueue[i];
+    const itemEl = document.getElementById(`item-${i}`);
+    if (itemEl) { itemEl.textContent = '↓'; itemEl.className = 'item-status downloading'; }
 
     setStatus(`Clipping ${i + 1} of ${pageQueue.length}…`, 'loading');
 
     const confluenceBaseUrl = page.confluencePageId ? new URL(page.url).origin : null;
 
+    assetProgressRow.classList.add('hidden');
+    assetProgressBar.style.width = '0%';
+
     const result = await clipPage({
-      url: page.url,
-      confluencePageId: page.confluencePageId || null,
+      url:               page.url,
+      confluencePageId:  page.confluencePageId || null,
       confluenceBaseUrl,
-      clipDir: clipDirHandle,
-      assetDir: assetDirHandle,
-      isCancelled: () => cancelled,
+      vaultDir:          vaultDirHandle,
+      clipSubfolder,
+      downloadAssets,
+      assetSubfolder,
+      isCancelled:       () => cancelled,
+      onAssetProgress:   downloadAssets ? (done, total) => {
+        if (total < 2) return; // not worth showing for 0-1 assets
+        assetProgressRow.classList.remove('hidden');
+        assetProgressLabel.textContent = `Assets: ${done} / ${total}`;
+        assetProgressBar.style.width = `${Math.round((done / total) * 100)}%`;
+      } : undefined,
     });
 
     if (result.error) {
       errorCount++;
-      if (statusEl) { statusEl.textContent = '✗'; statusEl.className = 'item-status error'; }
+      if (itemEl) { itemEl.textContent = '✗'; itemEl.className = 'item-status error'; }
       if (result.error !== 'cancelled') {
-        console.error(`Batch Clipper: failed ${page.url}`, result.error);
+        console.error(`Batch Clipper: failed ${page.url} — ${result.error}`);
+        if (itemEl) itemEl.title = result.error;
       }
     } else {
       successCount++;
-      if (statusEl) { statusEl.textContent = '✓'; statusEl.className = 'item-status done'; }
+      lastClippedTitle = result.title;
+      if (itemEl) { itemEl.textContent = '✓'; itemEl.className = 'item-status done'; }
     }
   }
 
-  // Done
   clipping = false;
   cancelBtn.classList.add('hidden');
   clipBtn.classList.remove('hidden');
+  assetProgressRow.classList.add('hidden');
 
   if (cancelled) {
     setStatus(`Cancelled. ${successCount} clipped, ${pageQueue.length - successCount - errorCount} skipped.`);
   } else if (errorCount === 0) {
-    setStatus(`Done! ${successCount} page${successCount !== 1 ? 's' : ''} clipped.`, 'success');
+    if (successCount === 1 && lastClippedTitle) {
+      const safeTitle = sanitiseTitle(lastClippedTitle);
+      setStatus(`Saved to ${clipSubfolder}/${safeTitle}.md`, 'success');
+    } else {
+      setStatus(`Done! ${successCount} pages clipped.`, 'success');
+    }
   } else {
     setStatus(`${successCount} clipped, ${errorCount} failed.`, errorCount === pageQueue.length ? 'error' : '');
   }
 
+  // Open last clipped file in Obsidian.
+  // Chrome will show a one-click "Open Obsidian?" confirmation; this is unavoidable in Chrome MV3.
+  if (successCount > 0 && lastClippedTitle && !cancelled) {
+    const safeTitle   = sanitiseTitle(lastClippedTitle);
+    const vaultName   = encodeURIComponent(vaultDirHandle.name);
+    const filePath    = encodeURIComponent(clipSubfolder + '/' + safeTitle);
+    const obsidianUrl = `obsidian://open?vault=${vaultName}&file=${filePath}`;
+    chrome.runtime.sendMessage({ action: 'openObsidian', url: obsidianUrl });
+  }
+
   clipBtn.textContent = 'Done';
+  clipBtn.disabled    = false;
+  clipBtn.onclick     = () => window.close();
   pageQueue = [];
 });
 
 cancelBtn.addEventListener('click', () => {
-  cancelled = true;
-  cancelBtn.disabled = true;
+  cancelled             = true;
+  cancelBtn.disabled    = true;
   cancelBtn.textContent = 'Cancelling…';
   setStatus('Cancelling after current page…', 'loading');
 });
 
-// --- Permission helpers ---
-
-async function ensurePermission(saved, active, saveKey) {
-  if (active) return active;
-  if (!saved) return null;
-
-  try {
-    let perm = await saved.queryPermission({ mode: 'readwrite' });
-    if (perm === 'granted') return saved;
-    perm = await saved.requestPermission({ mode: 'readwrite' });
-    if (perm === 'granted') return saved;
-  } catch {
-    // permission denied or handle stale
-  }
-  return null;
-}
-
 // --- Init ---
 
 async function init() {
-  // Restore saved folder handles
   try {
-    const clip = await loadHandle('clipDir');
-    if (clip) {
-      savedClipHandle = clip;
-      const perm = await clip.queryPermission({ mode: 'readwrite' });
-      if (perm === 'granted') clipDirHandle = clip;
-      updateFolderDisplay(clipPathDisplay, selectClipBtn, clip);
-      if (!savedAssetHandle) {
-        assetPathDisplay.textContent = `${clip.name}/assets/`;
-        assetPathDisplay.classList.remove('not-set');
-        assetPathDisplay.classList.add('is-set');
-      }
+    const vault = await loadHandle('vaultDir');
+    if (vault) {
+      savedVaultHandle = vault;
+      const perm = await vault.queryPermission({ mode: 'readwrite' });
+      if (perm === 'granted') vaultDirHandle = vault;
+      updateVaultDisplay(vault);
     }
   } catch { /* ignore */ }
 
-  try {
-    const asset = await loadHandle('assetDir');
-    if (asset) {
-      savedAssetHandle = asset;
-      const perm = await asset.queryPermission({ mode: 'readwrite' });
-      if (perm === 'granted') assetDirHandle = asset;
-      updateFolderDisplay(assetPathDisplay, selectAssetBtn, asset);
-    }
-  } catch { /* ignore */ }
+  [clipSubfolder, downloadAssets, assetSubfolder] = await Promise.all([
+    loadSetting('clipSubfolder', ''),
+    loadSetting('downloadAssets', false),
+    loadSetting('assetSubfolder', 'assets'),
+  ]);
 
-  // Scan the active tab
+  downloadAssetsEl.checked = downloadAssets;
+  updateClipSubfolderDisplay(true);
+  updateAssetSubfolderDisplay(true);
+
   chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
     const tab = tabs[0];
     if (!tab) {
@@ -334,14 +558,12 @@ async function init() {
       return;
     }
 
-    // Try sending to existing content script
     chrome.tabs.sendMessage(tab.id, { action: 'getPageInfo' }, async (response) => {
       if (!chrome.runtime.lastError && response) {
         applyPageInfo(response);
         return;
       }
 
-      // Content script not injected yet — inject and retry
       try {
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
@@ -349,7 +571,7 @@ async function init() {
         });
       } catch {
         pageTitleEl.textContent = 'Cannot scan this page';
-        setStatus('Restricted page (chrome://, extension, etc.)', 'error');
+        setStatus('Cannot scan this page (restricted URL).', 'error');
         return;
       }
 
@@ -357,7 +579,7 @@ async function init() {
         if (chrome.runtime.lastError || !response2) {
           pageTitleEl.textContent = tab.title || 'Unknown page';
           pageInfo = { url: tab.url, title: tab.title, isConfluence: false, pageId: null };
-          // Still allow clipping for generic pages
+          setStatus('Could not scan page. Try reloading the tab.', 'error');
           childPagesSectionEl.classList.add('hidden');
           updateClipButton();
           return;
@@ -366,13 +588,14 @@ async function init() {
       });
     });
   });
+
+  updateClipButton();
 }
 
 function applyPageInfo(info) {
   pageInfo = info;
   pageTitleEl.textContent = info.title || 'Untitled';
 
-  // Show child pages option only for Confluence
   if (info.isConfluence) {
     childPagesSectionEl.classList.remove('hidden');
   } else {

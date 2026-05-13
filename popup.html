@@ -1,59 +1,99 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <link rel="stylesheet" href="popup.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Batch Clipper</title>
+  <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
   <div class="header">
-    <h1>📎 Batch Clipper</h1>
+    <span class="title">Batch Clipper</span>
   </div>
 
-  <div id="page-info" class="section">
-    <label class="field-label">Page</label>
+  <div id="page-info" class="setting">
+    <div class="setting-label">Page</div>
     <div id="page-title" class="page-title">Scanning…</div>
   </div>
 
-  <div id="child-pages-section" class="section">
+  <div id="child-pages-section" class="setting hidden">
     <label class="toggle-row">
-      <input type="checkbox" id="include-children">
-      <span>Include child pages</span>
+      <input type="checkbox" id="include-children" />
+      <span class="setting-label" style="margin-bottom:0">Include child pages</span>
     </label>
     <div id="depth-row" class="depth-row hidden">
-      <label for="depth-select">Depth:</label>
-      <select id="depth-select">
-        <option value="0" selected>All</option>
-        <option value="1">1 level</option>
-        <option value="2">2 levels</option>
-        <option value="3">3 levels</option>
-        <option value="5">5 levels</option>
-      </select>
+      <span class="setting-description">Depth:</span>
+      <input type="number" id="depth-input" min="1" value="1" placeholder="1" />
+      <span class="setting-description" style="margin-bottom:0">(blank = all)</span>
     </div>
   </div>
 
-  <div class="section">
-    <div class="folder-row">
-      <label class="field-label">Clip to:</label>
-      <span id="clip-path-display" class="path-display not-set">Not set</span>
-      <button id="select-clip-btn" class="btn-small">Browse…</button>
+  <!-- Vault -->
+  <div class="setting">
+    <div class="setting-header">
+      <span class="setting-label">Vault</span>
+      <button id="select-vault-btn">Browse…</button>
     </div>
-    <div class="folder-row">
-      <label class="field-label">Assets:</label>
-      <span id="asset-path-display" class="path-display not-set">Default (assets/)</span>
-      <button id="select-asset-btn" class="btn-small">Change</button>
+    <div class="setting-description">Root folder of your Obsidian vault.</div>
+    <div id="vault-path-display" class="path-display not-set">Not set</div>
+  </div>
+
+  <!-- Clip to subfolder -->
+  <div class="setting">
+    <div class="setting-header">
+      <span class="setting-label">Clip to</span>
+      <button id="select-clip-subfolder-btn" disabled>Set…</button>
+    </div>
+    <div class="setting-description">Subfolder inside vault for clipped pages.</div>
+    <div id="clip-subfolder-display" class="path-display not-set">Not set</div>
+    <div id="clip-subfolder-picker" class="subfolder-picker hidden">
+      <select id="clip-subfolder-select">
+        <option value="">— existing folders —</option>
+      </select>
+      <div class="subfolder-picker-row">
+        <input type="text" id="clip-new-folder-input" class="subfolder-input" placeholder="or type a new name…" />
+        <button id="clip-subfolder-confirm" class="btn-confirm">✓</button>
+      </div>
     </div>
   </div>
+
+  <!-- Download assets -->
+  <div class="setting">
+    <div class="setting-header">
+      <label class="toggle-row" style="flex:1">
+        <input type="checkbox" id="download-assets" />
+        <span class="setting-label" style="margin-bottom:0">Download assets</span>
+      </label>
+      <button id="select-asset-subfolder-btn" class="hidden">Set…</button>
+    </div>
+    <div class="setting-description">Save images and files inside the clip subfolder.</div>
+    <div id="asset-subfolder-display" class="path-display hidden">assets</div>
+    <div id="asset-subfolder-picker" class="subfolder-picker hidden">
+      <select id="asset-subfolder-select">
+        <option value="">— existing folders —</option>
+      </select>
+      <div class="subfolder-picker-row">
+        <input type="text" id="asset-new-folder-input" class="subfolder-input" placeholder="or type a new name…" />
+        <button id="asset-subfolder-confirm" class="btn-confirm">✓</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="status" class="status"></div>
+  <div id="asset-progress-row" class="asset-progress-row hidden">
+    <span id="asset-progress-label" class="asset-progress-label">Assets: 0 / 0</span>
+    <div class="asset-progress-track">
+      <div id="asset-progress-bar" class="asset-progress-bar"></div>
+    </div>
+  </div>
+
+  <ul id="progress-list" class="progress-list"></ul>
 
   <div class="actions">
     <button id="clip-btn" class="btn-primary" disabled>Clip</button>
     <button id="cancel-btn" class="btn-secondary hidden">Cancel</button>
   </div>
 
-  <div id="status" class="status"></div>
-
-  <ul id="progress-list" class="progress-list"></ul>
-
-  <!-- Libraries loaded in order: utils (globals), then modules, then defuddle bundle -->
   <script src="lib/utils.js"></script>
   <script src="lib/fs-utils.js"></script>
   <script src="lib/frontmatter.js"></script>
