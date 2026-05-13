@@ -114,7 +114,7 @@ tags:
 | Category | Extensions |
 |---|---|
 | Images | `png` `jpg` `jpeg` `gif` `webp` `svg` `ico` `bmp` `tiff` `avif` `heic` |
-| Documents | `pdf` `doc` `docx` `xls` `xlsx` `ppt` `pptx` `odt` `ods` `odp` `csv` `txt` `rtf` |
+| Documents | `pdf` `doc` `docx` `xls` `xlsx` `ppt` `pptx` `odt` `ods` `odp` `csv` `txt` `rtf` `eml` |
 | Video | `mp4` `webm` `mov` `avi` `mkv` `m4v` |
 | Audio | `mp3` `wav` `ogg` `m4a` `flac` `aac` |
 | Archives | `zip` `tar` `gz` `7z` |
