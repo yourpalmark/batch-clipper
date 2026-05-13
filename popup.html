@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="header">
+    <h1>📎 Batch Clipper</h1>
+  </div>
+
+  <div id="page-info" class="section">
+    <label class="field-label">Page</label>
+    <div id="page-title" class="page-title">Scanning…</div>
+  </div>
+
+  <div id="child-pages-section" class="section">
+    <label class="toggle-row">
+      <input type="checkbox" id="include-children">
+      <span>Include child pages</span>
+    </label>
+    <div id="depth-row" class="depth-row hidden">
+      <label for="depth-select">Depth:</label>
+      <select id="depth-select">
+        <option value="0" selected>All</option>
+        <option value="1">1 level</option>
+        <option value="2">2 levels</option>
+        <option value="3">3 levels</option>
+        <option value="5">5 levels</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="folder-row">
+      <label class="field-label">Clip to:</label>
+      <span id="clip-path-display" class="path-display not-set">Not set</span>
+      <button id="select-clip-btn" class="btn-small">Browse…</button>
+    </div>
+    <div class="folder-row">
+      <label class="field-label">Assets:</label>
+      <span id="asset-path-display" class="path-display not-set">Default (assets/)</span>
+      <button id="select-asset-btn" class="btn-small">Change</button>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button id="clip-btn" class="btn-primary" disabled>Clip</button>
+    <button id="cancel-btn" class="btn-secondary hidden">Cancel</button>
+  </div>
+
+  <div id="status" class="status"></div>
+
+  <ul id="progress-list" class="progress-list"></ul>
+
+  <!-- Libraries loaded in order: utils (globals), then modules, then defuddle bundle -->
+  <script src="lib/utils.js"></script>
+  <script src="lib/fs-utils.js"></script>
+  <script src="lib/frontmatter.js"></script>
+  <script src="lib/assets.js"></script>
+  <script src="lib/confluence.js"></script>
+  <script src="defuddle.bundle.js"></script>
+  <script src="lib/clipper.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

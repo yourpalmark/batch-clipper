@@ -1,0 +1,232 @@
+/* popup.css — Batch Clipper popup styles */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  width: 360px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  color: #1a1a1a;
+  padding: 12px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.header h1 {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Sections */
+
+.section {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e5e5e5;
+}
+
+.field-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 4px;
+  display: block;
+}
+
+.page-title {
+  font-size: 14px;
+  font-weight: 500;
+  word-break: break-word;
+}
+
+/* Toggle row */
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.toggle-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.depth-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-left: 24px;
+}
+
+.depth-row select {
+  padding: 3px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 12px;
+  background: white;
+}
+
+/* Folder rows */
+
+.folder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.folder-row .field-label {
+  min-width: 55px;
+  margin-bottom: 0;
+}
+
+.path-display {
+  flex: 1;
+  font-size: 12px;
+  padding: 4px 8px;
+  background: #f5f5f5;
+  border-radius: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-display.not-set {
+  color: #999;
+  font-style: italic;
+}
+
+.path-display.is-set {
+  color: #1a1a1a;
+  font-style: normal;
+}
+
+.btn-small {
+  padding: 4px 10px;
+  font-size: 11px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-small:hover {
+  background: #f0f0f0;
+}
+
+/* Actions */
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.btn-primary {
+  flex: 1;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: white;
+  background: #0053e2;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #004acc;
+}
+
+.btn-primary:disabled {
+  background: #b0b0b0;
+  cursor: default;
+}
+
+.btn-secondary {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #1a1a1a;
+  background: white;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.btn-secondary:hover {
+  background: #f0f0f0;
+}
+
+/* Status */
+
+.status {
+  font-size: 12px;
+  min-height: 18px;
+  margin-bottom: 6px;
+}
+
+.status.success { color: #2a8703; }
+.status.error { color: #ea1100; }
+.status.loading { color: #666; }
+
+/* Progress list */
+
+.progress-list {
+  list-style: none;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.progress-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-size: 12px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.progress-list li:last-child {
+  border-bottom: none;
+}
+
+.progress-list .page-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 8px;
+}
+
+.item-status {
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 24px;
+  text-align: center;
+}
+
+.item-status.pending { color: #999; }
+.item-status.downloading { color: #0053e2; }
+.item-status.done { color: #2a8703; }
+.item-status.error { color: #ea1100; }
+
+/* Utilities */
+
+.hidden { display: none !important; }
