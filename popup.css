@@ -222,6 +222,35 @@ body {
 .status.success { color: #a6e3a1; }
 .status.loading { color: #89dceb; }
 
+/* Discovery progress (indeterminate) */
+
+.discovery-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.discovery-progress-label {
+  font-size: 11px;
+  color: #89dceb;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+@keyframes discovery-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
+.discovery-progress-bar {
+  height: 100%;
+  width: 25%;
+  background: #89dceb;
+  border-radius: 2px;
+  animation: discovery-sweep 1.4s ease-in-out infinite;
+}
+
 /* Asset download progress bar */
 
 .asset-progress-row {

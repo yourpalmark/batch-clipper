@@ -9,8 +9,11 @@ let savedVaultHandle = null;   // Persisted FSA handle (may need permission re-g
 let clipSubfolder    = '';     // e.g. "raw"
 let assetSubfolder   = 'assets';
 let downloadAssets   = false;
-let cancelled        = false;
-let clipping         = false;
+let cancelled          = false;
+let discoveryCancelled = false;
+let discovering        = false;
+let discoveryEpoch     = 0;   // incremented each run; callbacks ignore stale epochs
+let clipping           = false;
 let pageInfo         = null;   // { url, title, isConfluence, pageId }
 let pageQueue        = [];     // [{ url, title, confluencePageId }]
 
@@ -39,6 +42,9 @@ const assetSubfolderPicker     = document.getElementById('asset-subfolder-picker
 const assetSubfolderSelect     = document.getElementById('asset-subfolder-select');
 const assetNewFolderInput      = document.getElementById('asset-new-folder-input');
 const assetSubfolderConfirm    = document.getElementById('asset-subfolder-confirm');
+
+const discoveryProgressRow     = document.getElementById('discovery-progress-row');
+const discoveryProgressLabel   = document.getElementById('discovery-progress-label');
 
 const assetProgressRow         = document.getElementById('asset-progress-row');
 const assetProgressLabel       = document.getElementById('asset-progress-label');
@@ -338,11 +344,18 @@ includeChildrenEl.addEventListener('change', async () => {
   const checked = includeChildrenEl.checked;
   depthRowEl.classList.toggle('hidden', !checked);
 
-  if (checked && pageInfo?.isConfluence && pageInfo?.pageId) {
-    await discoverChildPages();
-  } else {
+  if (!checked) {
+    // Cancel any in-progress discovery
+    if (discovering) discoveryCancelled = true;
     pageQueue = [];
+    discoveryProgressRow.classList.add('hidden');
+    setStatus('');
     updateClipButton();
+    return;
+  }
+
+  if (pageInfo?.isConfluence && pageInfo?.pageId) {
+    await discoverChildPages();
   }
 });
 
@@ -359,16 +372,48 @@ depthInputEl.addEventListener('change', async () => {
 });
 
 async function discoverChildPages() {
+  // Cancel any in-flight run and claim a new epoch
+  discoveryCancelled = true;
+  const myEpoch = ++discoveryEpoch;
+
+  // Give the event loop a tick so in-flight callbacks see the cancellation
+  await new Promise(r => setTimeout(r, 0));
+
+  // Another call may have started after us — bail out if we're stale
+  if (myEpoch !== discoveryEpoch) return;
+
+  discoveryCancelled  = false;
+  discovering         = true;
+
   setStatus('Discovering child pages…', 'loading');
   clipBtn.disabled    = true;
   clipBtn.textContent = 'Discovering…';
+
+  // Show indeterminate discovery bar, reset count
+  discoveryProgressLabel.textContent = '0 found';
+  discoveryProgressRow.classList.remove('hidden');
 
   const depthVal = depthInputEl.value.trim();
   const maxDepth = depthVal === '' ? Infinity : Math.max(1, parseInt(depthVal, 10));
   const baseUrl  = new URL(pageInfo.url).origin;
 
   try {
-    const children = await fetchChildPages(baseUrl, pageInfo.pageId, maxDepth, 0, () => false);
+    const children = await fetchChildPages(
+      baseUrl, pageInfo.pageId, maxDepth, 0, () => discoveryCancelled || myEpoch !== discoveryEpoch,
+      (count) => {
+        // Ignore callbacks from a superseded run
+        if (myEpoch !== discoveryEpoch) return;
+        discoveryProgressLabel.textContent = `${count} found`;
+      }
+    );
+
+    if (myEpoch !== discoveryEpoch || discoveryCancelled) {
+      discovering = false;
+      return;
+    }
+
+    discovering = false;
+    discoveryProgressRow.classList.add('hidden');
 
     pageQueue = [
       { url: pageInfo.url, title: pageInfo.title, confluencePageId: pageInfo.pageId },
@@ -378,6 +423,12 @@ async function discoverChildPages() {
     setStatus(`Found ${children.length} child page${children.length !== 1 ? 's' : ''}.`);
     updateClipButton();
   } catch (err) {
+    if (myEpoch !== discoveryEpoch || discoveryCancelled) {
+      discovering = false;
+      return;
+    }
+    discovering = false;
+    discoveryProgressRow.classList.add('hidden');
     setStatus(`Failed to discover child pages: ${err.message}`, 'error');
     pageQueue = [];
     updateClipButton();
@@ -423,8 +474,9 @@ clipBtn.addEventListener('click', async () => {
     pageQueue = [entry];
   }
 
-  clipping  = true;
-  cancelled = false;
+  clipping    = true;
+  cancelled   = false;
+  discovering = false;
   clipBtn.classList.add('hidden');
   cancelBtn.classList.remove('hidden');
   progressListEl.innerHTML = '';
@@ -451,7 +503,10 @@ clipBtn.addEventListener('click', async () => {
 
     setStatus(`Clipping ${i + 1} of ${pageQueue.length}…`, 'loading');
 
-    const confluenceBaseUrl = page.confluencePageId ? new URL(page.url).origin : null;
+    // Set confluenceBaseUrl whenever the page is on a Confluence host, even if we don't
+    // have a pageId yet — clipPage will call resolvePageId to look it up via REST API.
+    const { isConfluence } = detectConfluence(page.url);
+    const confluenceBaseUrl = (page.confluencePageId || isConfluence) ? new URL(page.url).origin : null;
 
     assetProgressRow.classList.add('hidden');
     assetProgressBar.style.width = '0%';

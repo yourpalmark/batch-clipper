@@ -23,8 +23,8 @@
     </label>
     <div id="depth-row" class="depth-row hidden">
       <span class="setting-description">Depth:</span>
-      <input type="number" id="depth-input" min="1" value="1" placeholder="1" />
-      <span class="setting-description" style="margin-bottom:0">(blank = all)</span>
+      <input type="number" id="depth-input" min="1" placeholder="all" />
+      <span class="setting-description" style="margin-bottom:0">levels (blank = all)</span>
     </div>
   </div>
 
@@ -80,6 +80,12 @@
   </div>
 
   <div id="status" class="status"></div>
+  <div id="discovery-progress-row" class="discovery-progress-row hidden">
+    <span id="discovery-progress-label" class="discovery-progress-label">Discovering…</span>
+    <div class="asset-progress-track">
+      <div id="discovery-progress-bar" class="discovery-progress-bar"></div>
+    </div>
+  </div>
   <div id="asset-progress-row" class="asset-progress-row hidden">
     <span id="asset-progress-label" class="asset-progress-label">Assets: 0 / 0</span>
     <div class="asset-progress-track">
