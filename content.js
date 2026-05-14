@@ -74,12 +74,26 @@ function replaceDrawioSvgsWithPngUrls() {
 
     const text = scriptEl.textContent || '';
 
-    // Extract the attachment PNG path from imageUrl assignment
-    // Pattern: imageUrl = '' + '/download/attachments/...' + '?version=...'
-    const imgMatch = text.match(/imageUrl\s*=\s*''\s*\+\s*'([^']+)'\s*\+\s*'([^']*)'/);
-    if (!imgMatch) continue;
+    // Extract PNG URL — two strategies:
+    // 1. imageUrl has the attachment path: imageUrl = '' + '/download/attachments/...' + '?version=...'
+    // 2. imageUrl has empty Velocity vars — fall back to loadUrl CRUD path
+    let pngUrl = null;
+    let diagramAlt = '';
 
-    const pngUrl = origin + imgMatch[1] + imgMatch[2];
+    const imgMatch = text.match(/imageUrl\s*=\s*''\s*\+\s*'([^']+)'\s*\+\s*'([^']*)'/);
+    if (imgMatch) {
+      pngUrl = origin + imgMatch[1] + imgMatch[2];
+      diagramAlt = imgMatch[1].split('/').pop().replace('.png', '');
+    } else {
+      const loadMatch = text.match(/loadUrl\s*=\s*[^']*'[^']*\/diagram\/crud\/([^/]+)\/(\d+)/);
+      if (loadMatch) {
+        const diagramName = decodeURIComponent(loadMatch[1]);
+        const contentId = loadMatch[2];
+        pngUrl = `${origin}/rest/drawio/1.0/diagram/png?contentId=${contentId}&diagramName=${encodeURIComponent(diagramName)}`;
+        diagramAlt = diagramName;
+      }
+    }
+    if (!pngUrl) continue;
 
     // Extract the diagram container ID from the script to find the SVG
     const containerIdMatch = text.match(/getElementById\(['"]([^'"]+)['"]\)/);
@@ -91,7 +105,7 @@ function replaceDrawioSvgsWithPngUrls() {
 
     const img = document.createElement('img');
     img.src = pngUrl;
-    img.alt = imgMatch[1].split('/').pop().replace('.png', '');
+    img.alt = diagramAlt;
     img.style.maxWidth = '100%';
     svg.replaceWith(img);
   }
