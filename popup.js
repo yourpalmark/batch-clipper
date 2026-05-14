@@ -514,6 +514,41 @@ clipBtn.addEventListener('click', async () => {
 
   const clipLog = []; // { title, url, filename, status, error }
 
+  // Build hierarchy path map: pageId -> subfolder segments for hierarchical clipping.
+  // Only used when batch has multiple pages (single-page clips use flat clipSubfolder).
+  const pageIdToSegments = new Map();
+  if (pageQueue.length > 1) {
+    // Map pageId -> sanitised title for ancestor lookup
+    const idToTitle = new Map();
+    for (const page of pageQueue) {
+      if (page.confluencePageId) {
+        idToTitle.set(page.confluencePageId, sanitiseTitle(page.title || ''));
+      }
+    }
+    // Root page (index 0, depth -1) goes directly in clipSubfolder
+    const rootPage = pageQueue[0];
+    if (rootPage.confluencePageId) {
+      pageIdToSegments.set(rootPage.confluencePageId, [clipSubfolder]);
+    }
+    // For each child page, walk ancestor chain to build path segments
+    for (const page of pageQueue.slice(1)) {
+      if (!page.confluencePageId) continue;
+      // Walk up parentId chain to build ancestor title segments
+      const segments = [clipSubfolder];
+      const chain = [];
+      let current = page;
+      while (current.parentId) {
+        const parentPage = pageQueue.find(p => p.confluencePageId === current.parentId);
+        if (!parentPage) break;
+        chain.unshift(sanitiseTitle(parentPage.title || ''));
+        current = parentPage;
+        if (current.depth === -1) break; // reached root
+      }
+      segments.push(...chain);
+      pageIdToSegments.set(page.confluencePageId, segments);
+    }
+  }
+
   for (let i = 0; i < pageQueue.length; i++) {
     if (cancelled) break;
 
@@ -539,6 +574,8 @@ clipBtn.addEventListener('click', async () => {
       if (live && live.html) liveHtml = live.html;
     }
 
+    const clipSubfolderSegments = pageIdToSegments.get(page.confluencePageId) || null;
+
     const result = await clipPage({
       url:               page.url,
       confluencePageId:  page.confluencePageId || null,
@@ -546,6 +583,7 @@ clipBtn.addEventListener('click', async () => {
       liveHtml,
       vaultDir:          vaultDirHandle,
       clipSubfolder,
+      clipSubfolderSegments,
       downloadAssets,
       assetSubfolder,
       isCancelled:       () => cancelled,
