@@ -417,8 +417,8 @@ async function discoverChildPages() {
     discoveryProgressRow.classList.add('hidden');
 
     pageQueue = [
-      { url: pageInfo.url, title: pageInfo.title, confluencePageId: pageInfo.pageId },
-      ...children.map(c => ({ url: c.url, title: c.title, confluencePageId: c.id })),
+      { url: pageInfo.url, title: pageInfo.title, confluencePageId: pageInfo.pageId, depth: -1, parentId: null },
+      ...children.map(c => ({ url: c.url, title: c.title, confluencePageId: c.id, depth: c.depth, parentId: c.parentId })),
     ];
 
     setStatus(`Found ${children.length} child page${children.length !== 1 ? 's' : ''}.`);
@@ -573,37 +573,63 @@ clipBtn.addEventListener('click', async () => {
     }
   }
 
-  // Write clip log if batch had more than 1 page
+  // Write clip log (always for batch, top-level in vault)
+  let clipLogWritten = false;
   if (clipLog.length > 1 && vaultDirHandle) {
     try {
       const now = new Date();
       const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
       const timeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
-      const ok    = clipLog.filter(e => e.status === 'ok');
+      const ok     = clipLog.filter(e => e.status === 'ok');
       const failed = clipLog.filter(e => e.status === 'failed');
+
+      // Build a map from confluencePageId -> log entry for tree rendering
+      const idToEntry = new Map();
+      for (let i = 0; i < pageQueue.length; i++) {
+        const page = pageQueue[i];
+        if (page.confluencePageId) idToEntry.set(page.confluencePageId, clipLog[i]);
+      }
+
+      // Render tree: root is pageQueue[0] (depth -1), children are depth 0, 1, 2...
+      // We render in pageQueue order (which is already depth-first from fetchChildPages).
+      // Indent level = depth + 1 (root is depth -1 → indent 0).
+      function renderEntry(entry, depth) {
+        const indent = '  '.repeat(Math.max(0, depth));
+        const icon = entry.status === 'ok' ? '✓' : '✗';
+        const link = entry.status === 'ok'
+          ? `[[${sanitiseTitle(entry.title)}]]`
+          : `[${entry.title}](${entry.url})`;
+        const errSuffix = entry.error && entry.error !== 'cancelled' ? ` — \`${entry.error}\`` : '';
+        return `${indent}- ${icon} ${link}${errSuffix}`;
+      }
+
       const lines = [
-        `# Clip Log — ${dateStr} ${timeStr}`,
+        `# clipper-log`,
         '',
-        `**${ok.length} clipped** | **${failed.length} failed** | **${clipLog.length} total**`,
+        `${dateStr} ${timeStr} — **${ok.length} clipped** | **${failed.length} failed** | **${clipLog.length} total**`,
+        '',
+        '## Pages',
         '',
       ];
-      if (ok.length) {
-        lines.push('## Clipped', '');
-        for (const e of ok) {
-          const link = e.filename ? `[[${clipSubfolder}/${sanitiseTitle(e.title)}]]` : `[${e.title}](${e.url})`;
-          lines.push(`- ✓ ${link}`);
-        }
-        lines.push('');
+
+      for (let i = 0; i < pageQueue.length && i < clipLog.length; i++) {
+        const page  = pageQueue[i];
+        const entry = clipLog[i];
+        const depth = page.depth === -1 ? 0 : (page.depth ?? 0) + 1;
+        lines.push(renderEntry(entry, depth));
       }
+
       if (failed.length) {
-        lines.push('## Failed', '');
+        lines.push('', '## Failed', '');
         for (const e of failed) {
-          lines.push(`- ✗ [${e.title}](${e.url})${e.error && e.error !== 'cancelled' ? ` — \`${e.error}\`` : ''}`);
+          const errSuffix = e.error && e.error !== 'cancelled' ? ` — \`${e.error}\`` : '';
+          lines.push(`- [${e.title}](${e.url})${errSuffix}`);
         }
-        lines.push('');
       }
-      const clipDir = await getOrCreateDir(vaultDirHandle, [clipSubfolder]);
-      await writeTextFile(lines.join('\n'), '_clip-log.md', clipDir);
+
+      lines.push('');
+      await writeTextFile(lines.join('\n'), 'clipper-log.md', vaultDirHandle);
+      clipLogWritten = true;
     } catch (e) {
       console.warn('Batch Clipper: failed to write clip log', e);
     }
@@ -627,14 +653,19 @@ clipBtn.addEventListener('click', async () => {
     setStatus(`${successCount} clipped, ${errorCount} failed.`, errorCount === pageQueue.length ? 'error' : '');
   }
 
-  // Open last clipped file in Obsidian.
-  // Chrome will show a one-click "Open Obsidian?" confirmation; this is unavoidable in Chrome MV3.
-  if (successCount > 0 && lastClippedTitle && !cancelled) {
-    const safeTitle   = sanitiseTitle(lastClippedTitle);
-    const vaultName   = encodeURIComponent(vaultDirHandle.name);
-    const filePath    = encodeURIComponent(clipSubfolder + '/' + safeTitle);
-    const obsidianUrl = `obsidian://open?vault=${vaultName}&file=${filePath}`;
-    chrome.runtime.sendMessage({ action: 'openObsidian', url: obsidianUrl });
+  // Open clipper-log in Obsidian after a batch, otherwise open the single clipped file.
+  if (successCount > 0 && !cancelled) {
+    const vaultName = encodeURIComponent(vaultDirHandle.name);
+    let filePath;
+    if (clipLogWritten) {
+      filePath = encodeURIComponent('clipper-log');
+    } else if (lastClippedTitle) {
+      filePath = encodeURIComponent(clipSubfolder + '/' + sanitiseTitle(lastClippedTitle));
+    }
+    if (filePath) {
+      const obsidianUrl = `obsidian://open?vault=${vaultName}&file=${filePath}`;
+      chrome.runtime.sendMessage({ action: 'openObsidian', url: obsidianUrl });
+    }
   }
 
   clipBtn.textContent = 'Done';
