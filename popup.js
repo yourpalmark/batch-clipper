@@ -512,6 +512,8 @@ clipBtn.addEventListener('click', async () => {
   let errorCount       = 0;
   let lastClippedTitle = null;
 
+  const clipLog = []; // { title, url, filename, status, error }
+
   for (let i = 0; i < pageQueue.length; i++) {
     if (cancelled) break;
 
@@ -562,10 +564,48 @@ clipBtn.addEventListener('click', async () => {
         console.error(`Batch Clipper: failed ${page.url} — ${result.error}`);
         if (itemEl) itemEl.title = result.error;
       }
+      clipLog.push({ title: page.title || page.url, url: page.url, filename: null, status: 'failed', error: result.error });
     } else {
       successCount++;
       lastClippedTitle = result.title;
       if (itemEl) { itemEl.textContent = '✓'; itemEl.className = 'item-status done'; }
+      clipLog.push({ title: result.title || page.title || page.url, url: page.url, filename: result.filename, status: 'ok', error: null });
+    }
+  }
+
+  // Write clip log if batch had more than 1 page
+  if (clipLog.length > 1 && vaultDirHandle) {
+    try {
+      const now = new Date();
+      const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+      const timeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+      const ok    = clipLog.filter(e => e.status === 'ok');
+      const failed = clipLog.filter(e => e.status === 'failed');
+      const lines = [
+        `# Clip Log — ${dateStr} ${timeStr}`,
+        '',
+        `**${ok.length} clipped** | **${failed.length} failed** | **${clipLog.length} total**`,
+        '',
+      ];
+      if (ok.length) {
+        lines.push('## Clipped', '');
+        for (const e of ok) {
+          const link = e.filename ? `[[${clipSubfolder}/${sanitiseTitle(e.title)}]]` : `[${e.title}](${e.url})`;
+          lines.push(`- ✓ ${link}`);
+        }
+        lines.push('');
+      }
+      if (failed.length) {
+        lines.push('## Failed', '');
+        for (const e of failed) {
+          lines.push(`- ✗ [${e.title}](${e.url})${e.error && e.error !== 'cancelled' ? ` — \`${e.error}\`` : ''}`);
+        }
+        lines.push('');
+      }
+      const clipDir = await getOrCreateDir(vaultDirHandle, [clipSubfolder]);
+      await writeTextFile(lines.join('\n'), '_clip-log.md', clipDir);
+    } catch (e) {
+      console.warn('Batch Clipper: failed to write clip log', e);
     }
   }
 
