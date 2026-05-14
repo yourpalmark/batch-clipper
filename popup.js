@@ -631,7 +631,7 @@ clipBtn.addEventListener('click', async () => {
       await writeTextFile(lines.join('\n'), 'clipper-log.md', vaultDirHandle);
       clipLogWritten = true;
     } catch (e) {
-      console.warn('Batch Clipper: failed to write clip log', e);
+      console.error('Batch Clipper: failed to write clip log', e);
     }
   }
 
