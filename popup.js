@@ -488,7 +488,7 @@ async function appendErrorLog(dirHandle, entry) {
     existing   = await file.text();
   } catch { /* file doesn't exist yet */ }
   const line = `[${entry.timestamp}] ${entry.url}\n  ${entry.error}\n\n`;
-  await writeTextFile(existing + line, ERROR_LOG_FILENAME, dirHandle);
+  try { await writeTextFile(existing + line, ERROR_LOG_FILENAME, dirHandle); } catch { /* ignore */ }
 }
 
 // --- Resume state helpers ---
@@ -681,18 +681,18 @@ async function startClipping(startIndex = 0) {
     if (result.error) {
       errorCount++;
       if (itemEl) { itemEl.textContent = '✗'; itemEl.className = 'item-status error'; }
-      if (result.error !== 'cancelled') {
-        console.error(`Batch Clipper: failed ${page.url} — ${result.error}`);
-        if (itemEl) itemEl.title = result.error;
-        // Append to persistent error log
-        if (vaultDirHandle) {
+      console.error(`Batch Clipper: failed ${page.url} — ${result.error}`);
+      if (itemEl) itemEl.title = result.error;
+      // Append to persistent error log
+      if (vaultDirHandle) {
+        try {
           const now = new Date();
           await appendErrorLog(vaultDirHandle, {
             timestamp: `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`,
             url: page.url,
             error: result.error,
           });
-        }
+        } catch { /* never crash the batch over a log write */ }
       }
       clipLog.push({ title: page.title || page.url, url: page.url, filename: null, status: 'failed', error: result.error });
     } else {
