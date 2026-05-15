@@ -575,6 +575,10 @@ clipBtn.addEventListener('click', async () => {
     }
 
     const clipSubfolderSegments = pageIdToSegments.get(page.confluencePageId) || null;
+    // assetPathSegments: the hierarchy below the asset root folder, mirroring the page's location.
+    // e.g. if page is at raw/Parent/Child/Page.md, segments = ["raw","Parent","Child"],
+    // so assetPathSegments = ["Parent","Child"] → assets land at raw/assets/Parent/Child/Title/
+    const assetPathSegments = clipSubfolderSegments ? clipSubfolderSegments.slice(1) : [];
 
     const result = await clipPage({
       url:               page.url,
@@ -586,6 +590,7 @@ clipBtn.addEventListener('click', async () => {
       clipSubfolderSegments,
       downloadAssets,
       assetSubfolder,
+      assetPathSegments,
       isCancelled:       () => cancelled,
       onAssetProgress:   downloadAssets ? (done, total) => {
         if (total < 2) return; // not worth showing for 0-1 assets

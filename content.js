@@ -186,6 +186,11 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
       const entityEl = document.querySelector('[data-entity-id]');
       if (entityEl) info.pageId = entityEl.getAttribute('data-entity-id');
     }
+
+    // Use ajs-page-title meta for title — document.title includes the space name
+    // (e.g. "Page Title - Space Name") which we don't want in filenames/folders.
+    const ajsTitle = document.querySelector('meta[name="ajs-page-title"]')?.getAttribute('content')?.trim();
+    if (ajsTitle) info.title = ajsTitle;
   }
 
   sendResponse(info);
