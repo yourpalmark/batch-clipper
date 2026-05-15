@@ -378,6 +378,63 @@ body {
   background: #45475a;
 }
 
+/* Resume banner */
+
+.resume-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #313244;
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  padding: 7px 10px;
+  margin-bottom: 8px;
+  gap: 8px;
+}
+
+.resume-banner-label {
+  font-size: 12px;
+  color: #cdd6f4;
+  font-weight: 500;
+  flex: 1;
+}
+
+.resume-banner-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.btn-resume {
+  padding: 4px 10px;
+  background: #cba6f7;
+  color: #1e1e2e;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.btn-resume:hover {
+  background: #d0bcff;
+}
+
+.btn-discard {
+  padding: 4px 10px;
+  background: #313244;
+  color: #6c7086;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.btn-discard:hover {
+  background: #45475a;
+  color: #cdd6f4;
+}
+
 /* Utilities */
 
 .hidden { display: none !important; }

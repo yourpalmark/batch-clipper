@@ -55,6 +55,10 @@ const clipBtn                  = document.getElementById('clip-btn');
 const cancelBtn                = document.getElementById('cancel-btn');
 const statusEl                 = document.getElementById('status');
 const progressListEl           = document.getElementById('progress-list');
+const resumeBannerEl           = document.getElementById('resume-banner');
+const resumeBannerLabel        = document.getElementById('resume-banner-label');
+const resumeBtn                = document.getElementById('resume-btn');
+const discardResumeBtn         = document.getElementById('discard-resume-btn');
 
 // --- IndexedDB persistence for FSA handles ---
 
@@ -467,9 +471,62 @@ async function ensurePermission(saved, active) {
   return null;
 }
 
+// --- Error log helpers ---
+
+const ERROR_LOG_FILENAME = 'clipper-errors.log';
+
+async function clearErrorLog(dirHandle) {
+  try { await dirHandle.removeEntry(ERROR_LOG_FILENAME); } catch { /* ignore */ }
+}
+
+async function appendErrorLog(dirHandle, entry) {
+  // Read existing content, append new line
+  let existing = '';
+  try {
+    const fh   = await dirHandle.getFileHandle(ERROR_LOG_FILENAME);
+    const file = await fh.getFile();
+    existing   = await file.text();
+  } catch { /* file doesn't exist yet */ }
+  const line = `[${entry.timestamp}] ${entry.url}\n  ${entry.error}\n\n`;
+  await writeTextFile(existing + line, ERROR_LOG_FILENAME, dirHandle);
+}
+
+// --- Resume state helpers ---
+
+const RESUME_FILENAME = 'clipper-resume.json';
+
+async function loadResumeState(dirHandle) {
+  try {
+    const fh = await dirHandle.getFileHandle(RESUME_FILENAME);
+    const file = await fh.getFile();
+    return JSON.parse(await file.text());
+  } catch { return null; }
+}
+
+async function saveResumeState(dirHandle, state) {
+  try {
+    await writeTextFile(JSON.stringify(state), RESUME_FILENAME, dirHandle);
+  } catch { /* ignore */ }
+}
+
+async function clearResumeState(dirHandle) {
+  try { await dirHandle.removeEntry(RESUME_FILENAME); } catch { /* ignore */ }
+}
+
+let resumeState = null; // { pageQueue, completedIndex, total, timestamp }
+
+async function checkAndShowResumeBanner(dirHandle) {
+  const state = await loadResumeState(dirHandle);
+  if (!state || !state.pageQueue || state.completedIndex == null) return;
+  resumeState = state;
+  const done = state.completedIndex + 1;
+  resumeBannerLabel.textContent = `Current batch (${done}/${state.total})`;
+  resumeBannerEl.classList.remove('hidden');
+}
+
 // --- Main clip action ---
 
-clipBtn.addEventListener('click', async () => {
+async function startClipping(startIndex = 0) {
   if (clipping) return;
 
   const activeVault = await ensurePermission(savedVaultHandle, vaultDirHandle);
@@ -497,22 +554,31 @@ clipBtn.addEventListener('click', async () => {
   discovering = false;
   clipBtn.classList.add('hidden');
   cancelBtn.classList.remove('hidden');
+  cancelBtn.disabled    = false;
+  cancelBtn.textContent = 'Cancel';
   progressListEl.innerHTML = '';
 
   pageQueue.forEach((page, i) => {
     const li = document.createElement('li');
+    const preStatus = i < startIndex ? '✓' : '·';
+    const preClass  = i < startIndex ? 'item-status done' : 'item-status pending';
     li.innerHTML = `
       <span class="page-name" title="${page.title}">${page.title}</span>
-      <span class="item-status pending" id="item-${i}">·</span>
+      <span class="${preClass}" id="item-${i}">${preStatus}</span>
     `;
     progressListEl.appendChild(li);
   });
 
-  let successCount     = 0;
+  let successCount     = startIndex; // count already-done pages as success for status display
   let errorCount       = 0;
   let lastClippedTitle = null;
 
   const clipLog = []; // { title, url, filename, status, error }
+  // Pre-fill log entries for skipped (already-done) pages
+  for (let i = 0; i < startIndex; i++) {
+    const page = pageQueue[i];
+    clipLog.push({ title: page.title || page.url, url: page.url, filename: sanitiseTitle(page.title || '') + '.md', status: 'ok', error: null });
+  }
 
   // Build hierarchy path map: pageId -> subfolder segments for hierarchical clipping.
   // Only used when batch has multiple pages (single-page clips use flat clipSubfolder).
@@ -549,7 +615,19 @@ clipBtn.addEventListener('click', async () => {
     }
   }
 
-  for (let i = 0; i < pageQueue.length; i++) {
+  // Save initial resume state for batch runs so a freeze can be recovered
+  if (pageQueue.length > 1 && startIndex === 0) {
+    await saveResumeState(vaultDirHandle, {
+      pageQueue,
+      completedIndex: -1,
+      total: pageQueue.length,
+      timestamp: Date.now(),
+    });
+    // Clear error log at the start of a new batch
+    await clearErrorLog(vaultDirHandle);
+  }
+
+  for (let i = startIndex; i < pageQueue.length; i++) {
     if (cancelled) break;
 
     const page   = pageQueue[i];
@@ -606,6 +684,15 @@ clipBtn.addEventListener('click', async () => {
       if (result.error !== 'cancelled') {
         console.error(`Batch Clipper: failed ${page.url} — ${result.error}`);
         if (itemEl) itemEl.title = result.error;
+        // Append to persistent error log
+        if (vaultDirHandle) {
+          const now = new Date();
+          await appendErrorLog(vaultDirHandle, {
+            timestamp: `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`,
+            url: page.url,
+            error: result.error,
+          });
+        }
       }
       clipLog.push({ title: page.title || page.url, url: page.url, filename: null, status: 'failed', error: result.error });
     } else {
@@ -613,6 +700,16 @@ clipBtn.addEventListener('click', async () => {
       lastClippedTitle = result.title;
       if (itemEl) { itemEl.textContent = '✓'; itemEl.className = 'item-status done'; }
       clipLog.push({ title: result.title || page.title || page.url, url: page.url, filename: result.filename, status: 'ok', error: null });
+    }
+
+    // Update resume state after each page so a freeze can be recovered from the next one
+    if (pageQueue.length > 1 && vaultDirHandle) {
+      await saveResumeState(vaultDirHandle, {
+        pageQueue,
+        completedIndex: i,
+        total: pageQueue.length,
+        timestamp: Date.now(),
+      });
     }
   }
 
@@ -684,16 +781,27 @@ clipBtn.addEventListener('click', async () => {
   assetProgressRow.classList.add('hidden');
 
   if (cancelled) {
-    setStatus(`Cancelled. ${successCount} clipped, ${pageQueue.length - successCount - errorCount} skipped.`);
-  } else if (errorCount === 0) {
-    if (successCount === 1 && lastClippedTitle) {
-      const safeTitle = sanitiseTitle(lastClippedTitle);
-      setStatus(`Saved to ${clipSubfolder}/${safeTitle}.md`, 'success');
-    } else {
-      setStatus(`Done! ${successCount} pages clipped.`, 'success');
-    }
+    // Cancel = pause: keep resume state so user can resume later
+    const remaining = pageQueue.length - successCount - errorCount;
+    setStatus(`Paused. ${successCount} clipped, ${remaining} remaining.`);
+    // Refresh banner with latest position
+    if (vaultDirHandle) await checkAndShowResumeBanner(vaultDirHandle);
   } else {
-    setStatus(`${successCount} clipped, ${errorCount} failed.`, errorCount === pageQueue.length ? 'error' : '');
+    // Completed fully — clear resume state
+    if (vaultDirHandle) await clearResumeState(vaultDirHandle);
+    resumeState = null;
+    resumeBannerEl.classList.add('hidden');
+
+    if (errorCount === 0) {
+      if (successCount === 1 && lastClippedTitle) {
+        const safeTitle = sanitiseTitle(lastClippedTitle);
+        setStatus(`Saved to ${clipSubfolder}/${safeTitle}.md`, 'success');
+      } else {
+        setStatus(`Done! ${successCount} pages clipped.`, 'success');
+      }
+    } else {
+      setStatus(`${successCount} clipped, ${errorCount} failed.`, errorCount === pageQueue.length ? 'error' : '');
+    }
   }
 
   // Open clipper-log in Obsidian after a batch, otherwise open the single clipped file.
@@ -714,14 +822,37 @@ clipBtn.addEventListener('click', async () => {
   clipBtn.textContent = 'Done';
   clipBtn.disabled    = false;
   clipBtn.onclick     = () => window.close();
-  pageQueue = [];
-});
+  if (!cancelled) pageQueue = [];
+}
+
+clipBtn.addEventListener('click', () => startClipping(0));
 
 cancelBtn.addEventListener('click', () => {
   cancelled             = true;
   cancelBtn.disabled    = true;
   cancelBtn.textContent = 'Cancelling…';
   setStatus('Cancelling after current page…', 'loading');
+  // Cancel = pause: resume state is preserved so the batch can be resumed later.
+});
+
+// --- Resume / Discard handlers ---
+
+resumeBtn.addEventListener('click', async () => {
+  if (!resumeState) return;
+  resumeBannerEl.classList.add('hidden');
+
+  // Restore queue and skip already-completed pages
+  pageQueue = resumeState.pageQueue;
+  const startIndex = resumeState.completedIndex + 1;
+  resumeState = null;
+
+  await startClipping(startIndex);
+});
+
+discardResumeBtn.addEventListener('click', async () => {
+  resumeBannerEl.classList.add('hidden');
+  resumeState = null;
+  if (vaultDirHandle) await clearResumeState(vaultDirHandle);
 });
 
 // --- Init ---
@@ -732,7 +863,11 @@ async function init() {
     if (vault) {
       savedVaultHandle = vault;
       const perm = await vault.queryPermission({ mode: 'readwrite' });
-      if (perm === 'granted') vaultDirHandle = vault;
+      if (perm === 'granted') {
+        vaultDirHandle = vault;
+        // Check for an interrupted batch that can be resumed
+        await checkAndShowResumeBanner(vault);
+      }
       updateVaultDisplay(vault);
     }
   } catch { /* ignore */ }
